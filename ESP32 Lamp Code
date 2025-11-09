@@ -1,4 +1,3 @@
-```cpp
 #include <WiFi.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
@@ -418,4 +417,3 @@ void loop() {
       break;
   }
 }
-```
