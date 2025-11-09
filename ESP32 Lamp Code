@@ -1,0 +1,419 @@
+#include <WiFi.h>
+#include <WebServer.h>
+#include <ESPmDNS.h>
+#include <Adafruit_NeoPixel.h>
+
+
+// WiFi Daten - HIER EINGEBEN
+const char* ssid = "Netzwerk Name";
+const char* password = "Netzwerkschlüssel";
+
+
+// LED Einstellungen
+#define LED_PIN 16        // GPIO Pin für DIN
+#define NUM_LEDS 21       // Anzahl deiner LEDs
+
+
+Adafruit_NeoPixel strip(NUM_LEDS, LED_PIN, NEO_GRB + NEO_KHZ800);
+WebServer server(80);
+
+
+// Aktuelle Einstellungen
+int brightness = 128;
+int r = 255, g = 0, b = 0;
+int mode = 0; // 0=solid, 1=rainbow, 2=fade
+int fadeSpeed = 30; // Fade Geschwindigkeit in ms
+bool isOn = true;
+bool needsUpdate = true; // Flag für Updates
+
+
+// HTML Web-Interface
+const char* html = R"(
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset='UTF-8'>
+  <meta name='viewport' content='width=device-width, initial-scale=1'>
+  <title>LED Controller</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      max-width: 420px;
+      width: 100%;
+      background: #1a252f;
+      padding: 40px 30px;
+      border-radius: 25px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+    }
+    h1 {
+      color: #3498db;
+      margin-bottom: 35px;
+      font-size: 28px;
+      text-align: center;
+      font-weight: 600;
+    }
+    .section {
+      margin-bottom: 30px;
+      padding: 20px;
+      background: #243447;
+      border-radius: 15px;
+    }
+    label {
+      display: block;
+      margin-bottom: 12px;
+      font-weight: 600;
+      color: #ecf0f1;
+      font-size: 14px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .color-picker-wrapper {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+    input[type='color'] {
+      width: 80px;
+      height: 80px;
+      border: 4px solid #34495e;
+      border-radius: 12px;
+      cursor: pointer;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+      transition: transform 0.2s;
+    }
+    input[type='color']:hover {
+      transform: scale(1.05);
+    }
+    .color-info {
+      flex: 1;
+      font-size: 16px;
+      color: #95a5a6;
+      font-weight: 500;
+    }
+    input[type='range'] {
+      width: 100%;
+      height: 8px;
+      border-radius: 5px;
+      background: linear-gradient(to right, #34495e, #3498db);
+      outline: none;
+      -webkit-appearance: none;
+    }
+    input[type='range']::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #3498db;
+      cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+      transition: all 0.2s;
+    }
+    input[type='range']::-webkit-slider-thumb:hover {
+      background: #2980b9;
+      transform: scale(1.1);
+    }
+    input[type='range']::-moz-range-thumb {
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      background: #3498db;
+      cursor: pointer;
+      border: none;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+    }
+    .value-display {
+      color: #3498db;
+      font-size: 18px;
+      font-weight: 700;
+      margin-top: 8px;
+      text-align: center;
+    }
+    .button-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 15px;
+    }
+    button {
+      background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+      border: none;
+      color: white;
+      padding: 15px 20px;
+      font-size: 15px;
+      font-weight: 600;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: all 0.3s;
+      box-shadow: 0 4px 15px rgba(52, 152, 219, 0.3);
+    }
+    button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 20px rgba(52, 152, 219, 0.5);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    .btn-off {
+      background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+      box-shadow: 0 4px 15px rgba(231, 76, 60, 0.3);
+      width: 100%;
+      margin-top: 10px;
+    }
+    .btn-off:hover {
+      box-shadow: 0 6px 20px rgba(231, 76, 60, 0.5);
+    }
+  </style>
+</head>
+<body>
+  <div class='container'>
+    <h1>💡 LED Lampe</h1>
+   
+    <div class='power-buttons'>
+      <button class='btn-on' onclick='turnOn()'>⚡ Einschalten</button>
+      <button class='btn-off' onclick='turnOff()'>⭕ Ausschalten</button>
+    </div>
+   
+    <div class='section'>
+      <label>🎨 Farbe wählen</label>
+      <div class='color-picker-wrapper'>
+        <input type='color' id='color' value='#ff0000' oninput='setColorLive()'>
+        <div class='color-info' id='colorInfo'>Rot</div>
+      </div>
+    </div>
+   
+    <div class='section'>
+      <label>💡 Helligkeit</label>
+      <input type='range' id='brightness' min='0' max='255' value='128' oninput='updateBrightDisplay()' onchange='setBrightness()'>
+      <div class='value-display' id='brightVal'>50%</div>
+    </div>
+   
+    <div class='section'>
+      <label>✨ Effekte</label>
+      <div class='button-group'>
+        <button onclick='setMode(0)'>🎨 Einfarbig</button>
+        <button onclick='setMode(1)'>🌈 Regenbogen</button>
+        <button onclick='setMode(2)'>💫 Fade</button>
+      </div>
+    </div>
+   
+    <div class='section' id='fadeSection' style='display:none;'>
+      <label>⚡ Fade Geschwindigkeit</label>
+      <input type='range' id='fadeSpeed' min='10' max='100' value='30' oninput='updateFadeDisplay()' onchange='setFadeSpeed()'>
+      <div class='value-display' id='fadeVal'>Normal</div>
+    </div>
+  </div>
+ 
+  <script>
+    let brightTimeout;
+    let fadeTimeout;
+   
+    function updateBrightDisplay() {
+      let b = document.getElementById('brightness').value;
+      let pct = Math.round((b/255)*100);
+      document.getElementById('brightVal').innerText = pct + '%';
+    }
+   
+    function updateFadeDisplay() {
+      let speed = document.getElementById('fadeSpeed').value;
+      let text = speed < 30 ? 'Schnell' : speed < 60 ? 'Normal' : 'Langsam';
+      document.getElementById('fadeVal').innerText = text;
+    }
+   
+    function hexToRgb(hex) {
+      let r = parseInt(hex.substr(1,2), 16);
+      let g = parseInt(hex.substr(3,2), 16);
+      let b = parseInt(hex.substr(5,2), 16);
+      return {r, g, b};
+    }
+   
+    function getColorName(hex) {
+      let {r, g, b} = hexToRgb(hex);
+      if (r > 200 && g < 100 && b < 100) return 'Rot';
+      if (r < 100 && g > 200 && b < 100) return 'Grün';
+      if (r < 100 && g < 100 && b > 200) return 'Blau';
+      if (r > 200 && g > 200 && b < 100) return 'Gelb';
+      if (r > 200 && g < 100 && b > 200) return 'Magenta';
+      if (r < 100 && g > 200 && b > 200) return 'Cyan';
+      if (r > 200 && g > 150 && b < 100) return 'Orange';
+      if (r > 150 && g < 100 && b > 150) return 'Lila';
+      if (r > 200 && g > 200 && b > 200) return 'Weiß';
+      if (r < 50 && g < 50 && b < 50) return 'Schwarz';
+      return 'RGB(' + r + ',' + g + ',' + b + ')';
+    }
+   
+    function setColorLive() {
+      let c = document.getElementById('color').value;
+      document.getElementById('colorInfo').innerText = getColorName(c);
+      let {r, g, b} = hexToRgb(c);
+      fetch('/setColor?r=' + r + '&g=' + g + '&b=' + b);
+    }
+   
+    function setBrightness() {
+      clearTimeout(brightTimeout);
+      brightTimeout = setTimeout(function() {
+        let b = document.getElementById('brightness').value;
+        fetch('/setBrightness?value=' + b);
+      }, 100);
+    }
+   
+    function setFadeSpeed() {
+      clearTimeout(fadeTimeout);
+      fadeTimeout = setTimeout(function() {
+        let s = document.getElementById('fadeSpeed').value;
+        fetch('/setFadeSpeed?value=' + s);
+      }, 100);
+    }
+   
+    function setMode(m) {
+      fetch('/setMode?mode=' + m);
+      document.getElementById('fadeSection').style.display = (m === 2) ? 'block' : 'none';
+    }
+   
+    function turnOn() {
+      fetch('/on');
+    }
+   
+    function turnOff() {
+      fetch('/off');
+    }
+  </script>
+</body>
+</html>
+)";
+
+
+void setup() {
+  Serial.begin(115200);
+ 
+  // LED Strip initialisieren
+  strip.begin();
+  strip.setBrightness(brightness);
+  strip.show();
+ 
+  // WiFi verbinden
+  WiFi.begin(ssid, password);
+  Serial.print("Verbinde mit WiFi");
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi verbunden!");
+  Serial.print("IP Adresse: ");
+  Serial.println(WiFi.localIP());
+ 
+  // mDNS starten
+  if (MDNS.begin("ledlampe")) {
+    Serial.println("mDNS gestartet! Erreichbar unter: http://ledlampe.local");
+  } else {
+    Serial.println("mDNS Fehler!");
+  }
+ 
+  // Web Server Routen
+  server.on("/", []() {
+    server.send(200, "text/html", html);
+  });
+ 
+  server.on("/setColor", []() {
+    r = server.arg("r").toInt();
+    g = server.arg("g").toInt();
+    b = server.arg("b").toInt();
+    mode = 0;
+    needsUpdate = true;
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.on("/setBrightness", []() {
+    brightness = server.arg("value").toInt();
+    strip.setBrightness(brightness);
+    needsUpdate = true;
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.on("/setMode", []() {
+    mode = server.arg("mode").toInt();
+    needsUpdate = true;
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.on("/setFadeSpeed", []() {
+    fadeSpeed = server.arg("value").toInt();
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.on("/on", []() {
+    isOn = true;
+    needsUpdate = true;
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.on("/off", []() {
+    isOn = false;
+    strip.clear();
+    strip.show();
+    server.send(200, "text/plain", "OK");
+  });
+ 
+  server.begin();
+  Serial.println("Web Server gestartet!");
+}
+
+
+uint16_t hue = 0;
+uint8_t fadeVal = 0;
+bool fadeDir = true;
+
+
+void loop() {
+  server.handleClient();
+ 
+  if (!isOn) {
+    delay(100);
+    return;
+  }
+ 
+  switch(mode) {
+    case 0: // Einfarbig
+      if(needsUpdate) {
+        for(int i=0; i<NUM_LEDS; i++) {
+          strip.setPixelColor(i, strip.Color(r, g, b));
+        }
+        strip.show();
+        needsUpdate = false;
+      }
+      delay(10);
+      break;
+     
+    case 1: // Regenbogen
+      for(int i=0; i<NUM_LEDS; i++) {
+        strip.setPixelColor(i, strip.gamma32(strip.ColorHSV(hue + (i * 65536L / NUM_LEDS))));
+      }
+      strip.show();
+      hue += 256;
+      delay(20);
+      break;
+     
+    case 2: // Fade
+      if(fadeDir) {
+        fadeVal += 5;
+        if(fadeVal >= 250) fadeDir = false;
+      } else {
+        fadeVal -= 5;
+        if(fadeVal <= 5) fadeDir = true;
+      }
+      for(int i=0; i<NUM_LEDS; i++) {
+        strip.setPixelColor(i, strip.Color(fadeVal, fadeVal/2, fadeVal/4));
+      }
+      strip.show();
+      delay(fadeSpeed);
+      break;
+  }
+}
